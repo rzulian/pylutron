@@ -18,6 +18,7 @@ import time
 from typing import Any, Callable, Dict, Type
 
 _LOGGER = logging.getLogger(__name__)
+logging.basicConfig(level=logging.DEBUG)
 
 # We brute force exception handling in a number of areas to ensure
 # connections can be recovered
@@ -226,13 +227,15 @@ class LutronXmlDbParser(object):
   (Output). We handle the most relevant features, but some things like LEDs,
   etc. are not implemented."""
 
-  def __init__(self, lutron, xml_db_str):
+  def __init__(self, lutron, xml_db_str, variable_ids):
     """Initializes the XML parser, takes the raw XML data as string input."""
     self._lutron = lutron
     self._xml_db_str = xml_db_str
     self.areas = []
+    self.variables = []
     self._occupancy_groups = {}
     self.project_name = None
+    self._variables_ids = variable_ids
 
   def parse(self):
     """Main entrypoint into the parser. It interprets and creates all the
@@ -279,6 +282,8 @@ class LutronXmlDbParser(object):
     top_area = root.find('Areas').find('Area')
     self.project_name = top_area.get('Name')
     visit_area(top_area)
+    for variable in self._variables_ids:
+      self.variables.append(self._parse_sysvar(variable))
     return True
 
   def _parse_area(self, area_xml, location):
@@ -476,6 +481,13 @@ class LutronXmlDbParser(object):
                           group_number=group_xml.get('OccupancyGroupNumber'),
                           uuid=group_xml.get('UUID'))
 
+  def _parse_sysvar(self, integration_id):
+    """Creates a Sysvar object
+    """
+    return Sysvar(self._lutron,
+                  name=f"variable {integration_id}",
+                  integration_id=integration_id)
+
 class Lutron(object):
   """Main Lutron Controller class.
 
@@ -500,12 +512,18 @@ class Lutron(object):
     self._ids = {}
     self._legacy_subscribers = {}
     self._areas = []
+    self._variables = []
     self._guid = None
 
   @property
   def areas(self):
     """Return the areas that were discovered for this Lutron controller."""
     return self._areas
+
+  @property
+  def variables(self):
+    """Return the variables that were declared for this Lutron controller."""
+    return self._variables
 
   def set_guid(self, guid):
     self._guid = guid
@@ -583,7 +601,7 @@ class Lutron(object):
         (cmd, str(integration_id)) + tuple((str(x) for x in args if x is not None)))
     self._conn.send(op + out_cmd)
 
-  def load_xml_db(self, cache_path=None, refresh_data=True):
+  def load_xml_db(self, cache_path=None, refresh_data=True, variable_ids=[]):
     """Load the Lutron database from the server if refresh_data is True
 
     If not, if a locally cached copy is available, use that instead, or
@@ -612,10 +630,11 @@ class Lutron(object):
 
     _LOGGER.info("Loaded xml db from %s" % loaded_from)
 
-    parser = LutronXmlDbParser(lutron=self, xml_db_str=xml_db)
+    parser = LutronXmlDbParser(lutron=self, xml_db_str=xml_db, variable_ids=variable_ids)
     assert(parser.parse())     # throw our own exception
     self._areas = parser.areas
     self._name = parser.project_name
+    self._variables = parser.variables
 
     _LOGGER.info('Found Lutron project: %s, %d areas' % (
         self._name, len(self.areas)))
@@ -1513,9 +1532,9 @@ class Sysvar(LutronEntity):
     """
     STATE_CHANGED = 1
 
-  def __init__(self, lutron, name, integration_id, uuid):
+  def __init__(self, lutron, name, integration_id):
     """Initializes the Output."""
-    super(Sysvar, self).__init__(lutron, name, uuid)
+    super(Sysvar, self).__init__(lutron, name, None)
     self._state = 0
     self._query_waiters = _RequestHelper()
     self._integration_id = integration_id
@@ -1545,7 +1564,7 @@ class Sysvar(LutronEntity):
     state = int(args[0])
     if state != Sysvar._ACTION_STATE:
       return False
-    new_state = float(args[1])
+    new_state = int(args[1])
     _LOGGER.debug("Updating sysvar id=%d (%s): s=%f" % (
         self._integration_id, self._name, new_state))
     self._state = new_state
