@@ -154,6 +154,7 @@ class LutronConnection(threading.Thread):
     self._send_locked("#MONITORING,5,1")
     self._send_locked("#MONITORING,6,1")
     self._send_locked("#MONITORING,8,1")
+    self._send_locked("#MONITORING,10,1")
 
   def _disconnect_locked(self):
     """Closes the current connection. Assume self._lock is held."""
@@ -1495,3 +1496,88 @@ class Area(object):
   def sensors(self):
     """Return the tuple of the MotionSensors from this area."""
     return tuple(sensor for sensor in self._sensors)
+
+
+class Sysvar(LutronEntity):
+  """This is the sysvar entity in Lutron universe. This refers to a
+  variable"""
+  _CMD_TYPE = 'SYSVAR'
+  _ACTION_STATE = 1
+
+  class Event(LutronEvent):
+    """Sysvar events that can be generated.
+
+    STATE_CHANGED: The sysvar state has changed.
+        Params:
+          state: new sysvar state
+    """
+    STATE_CHANGED = 1
+
+  def __init__(self, lutron, name, integration_id, uuid):
+    """Initializes the Output."""
+    super(Sysvar, self).__init__(lutron, name, uuid)
+    self._state = 0
+    self._query_waiters = _RequestHelper()
+    self._integration_id = integration_id
+
+    self._lutron.register_id(Sysvar._CMD_TYPE, self)
+
+  def __str__(self):
+    """Returns a pretty-printed string for this object."""
+    return 'Sysvar name: "%s"  id: %d' % (self._name, self._integration_id)
+
+  def __repr__(self):
+    """Returns a stringified representation of this object."""
+    return str({'name': self._name, 'id': self._integration_id})
+
+  @property
+  def id(self):
+    """The integration id"""
+    return self._integration_id
+
+  @property
+  def legacy_uuid(self):
+    return '%d-0' % self.id
+
+  def handle_update(self, args):
+    """Handles an event update for this object."""
+    _LOGGER.debug("handle_update sysvar %d -- %s" % (self._integration_id, args))
+    state = int(args[0])
+    if state != Sysvar._ACTION_STATE:
+      return False
+    new_state = float(args[1])
+    _LOGGER.debug("Updating sysvar id=%d (%s): s=%f" % (
+        self._integration_id, self._name, new_state))
+    self._state = new_state
+    self._query_waiters.notify()
+    self._dispatch_event(Sysvar.Event.STATE_CHANGED, {'state': self._state})
+    return True
+
+  def __do_query_state(self):
+    """Helper to perform the actual query the current state of the
+    sysvar. """
+    self._lutron.send(Lutron.OP_QUERY, Sysvar._CMD_TYPE, self._integration_id, Sysvar._ACTION_STATE)
+
+  def last_state(self):
+    """Returns last cached value of the sysvar level, no query is performed."""
+    return self._state
+
+  @property
+  def state(self):
+    """Returns the current sysvar state number by querying the remote controller."""
+    ev = self._query_waiters.request(self.__do_query_state)
+    ev.wait(1.0)
+    return self._state
+
+  @state.setter
+  def state(self, new_state):
+    """Sets the new sysvar state."""
+    self.set_state(new_state)
+
+  def set_state(self, new_state):
+    """Sets the new sysvar state number."""
+    if self._state == new_state:
+      return
+    self._lutron.send(Lutron.OP_EXECUTE, Sysvar._CMD_TYPE, self._integration_id, Sysvar._ACTION_STATE, new_state)
+    self._state = new_state
+
