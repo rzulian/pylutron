@@ -1535,6 +1535,7 @@ class Sysvar(LutronEntity):
   def __init__(self, lutron, name, integration_id):
     """Initializes the Output."""
     super(Sysvar, self).__init__(lutron, name, None)
+    self._name = name
     self._state = 0
     self._query_waiters = _RequestHelper()
     self._integration_id = integration_id
@@ -1558,6 +1559,11 @@ class Sysvar(LutronEntity):
   def legacy_uuid(self):
     return '%d-0' % self.id
 
+  @property
+  def name(self):
+    """Returns the name of this area."""
+    return self._name
+
   def handle_update(self, args):
     """Handles an event update for this object."""
     _LOGGER.debug("handle_update sysvar %d -- %s" % (self._integration_id, args))
@@ -1573,8 +1579,7 @@ class Sysvar(LutronEntity):
     return True
 
   def __do_query_state(self):
-    """Helper to perform the actual query the current state of the
-    sysvar. """
+    """Helper to perform the actual query the current state of the sysvar. """
     self._lutron.send(Lutron.OP_QUERY, Sysvar._CMD_TYPE, self._integration_id, Sysvar._ACTION_STATE)
 
   def last_state(self):
